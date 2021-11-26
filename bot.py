@@ -1,4 +1,5 @@
 import discord
+from discord.ext import tasks
 import re
 import requests
 import json
@@ -8,6 +9,7 @@ from requests_html import AsyncHTMLSession
 import statsapi
 import random
 from collections import defaultdict
+import asyncio
 
 testmode = False
 
@@ -29,7 +31,7 @@ teams = { "arizona diamondbacks" :"ari",
         "atlanta braves":"atl",
         "philadelphia phillies":"phi",
         "boston red sox":"bos",
-        "cleveland indians":"cle",
+        "cleveland guardians":"cle",
         "cincinnati reds":"cin",
         "minnesota twins":"min",
 
@@ -63,7 +65,7 @@ lookup = { "arizona diamondbacks" :"ari",
         "atlanta braves":"atl",
         "philadelphia phillies":"phi",
         "boston red sox":"bos",
-        "cleveland indians":"cle",
+        "cleveland guardians":"cle",
         "cincinnati reds":"cin",
         "minnesota twins":"min",
 
@@ -96,7 +98,7 @@ logo2team = { "diamondbacks" :"arizona diamondbacks",
         "braves":"atlanta braves",
         "phillies":"philadelphia phillies",
         "red sox":"boston red sox",
-        "indians":"cleveland indians",
+        "guardians":"cleveland guardians",
         "reds":"cincinnati reds",
         "twins":"minnesota twins",
 
@@ -113,8 +115,8 @@ logo2team = { "diamondbacks" :"arizona diamondbacks",
         "cubs":"chicago cubs",
         "white sox":"chicago white sox",
         }
-team2id = {'arizona diamondbacks': 109, 'washington nationals': 120, 'miami marlins': 146, 'pittsburgh pirates': 134, 'milwaukee brewers': 158, 'toronto blue jays': 141, 'baltimore orioles': 110, 'texas rangers': 140, 'colorado rockies': 115, 'detroit tigers': 116, 'oakland athletics': 133, 'houston astros': 117, 'seattle mariners': 136, 'atlanta braves': 144, 'philadelphia phillies': 143, 'boston red sox': 111, 'cleveland indians': 114, 'cincinnati reds': 113, 'minnesota twins': 142, 'tampa bay rays': 139, 'san francisco giants': 137, 'kansas city royals': 118, 'san diego padres': 135, 'st. louis cardinals': 138, 'new york yankees': 147, 'new york mets': 121, 'los angeles dodgers': 119, 'los angeles angels': 108, 'chicago cubs': 112, 'chicago white sox': 145}
-id2team = {109: 'arizona diamondbacks', 120: 'washington nationals', 146: 'miami marlins', 134: 'pittsburgh pirates', 158: 'milwaukee brewers', 141: 'toronto blue jays', 110: 'baltimore orioles', 140: 'texas rangers', 115: 'colorado rockies', 116: 'detroit tigers', 133: 'oakland athletics', 117: 'houston astros', 136: 'seattle mariners', 144: 'atlanta braves', 143: 'philadelphia phillies', 111: 'boston red sox', 114: 'cleveland indians', 113: 'cincinnati reds', 142: 'minnesota twins', 139: 'tampa bay rays', 137: 'san francisco giants', 118: 'kansas city royals', 135: 'san diego padres', 138: 'st. louis cardinals', 147: 'new york yankees', 121: 'new york mets', 119: 'los angeles dodgers', 108: 'los angeles angels', 112: 'chicago cubs', 145: 'chicago white sox'}
+team2id = {'arizona diamondbacks': 109, 'washington nationals': 120, 'miami marlins': 146, 'pittsburgh pirates': 134, 'milwaukee brewers': 158, 'toronto blue jays': 141, 'baltimore orioles': 110, 'texas rangers': 140, 'colorado rockies': 115, 'detroit tigers': 116, 'oakland athletics': 133, 'houston astros': 117, 'seattle mariners': 136, 'atlanta braves': 144, 'philadelphia phillies': 143, 'boston red sox': 111, 'cleveland guardians': 114, 'cincinnati reds': 113, 'minnesota twins': 142, 'tampa bay rays': 139, 'san francisco giants': 137, 'kansas city royals': 118, 'san diego padres': 135, 'st. louis cardinals': 138, 'new york yankees': 147, 'new york mets': 121, 'los angeles dodgers': 119, 'los angeles angels': 108, 'chicago cubs': 112, 'chicago white sox': 145}
+id2team = {109: 'arizona diamondbacks', 120: 'washington nationals', 146: 'miami marlins', 134: 'pittsburgh pirates', 158: 'milwaukee brewers', 141: 'toronto blue jays', 110: 'baltimore orioles', 140: 'texas rangers', 115: 'colorado rockies', 116: 'detroit tigers', 133: 'oakland athletics', 117: 'houston astros', 136: 'seattle mariners', 144: 'atlanta braves', 143: 'philadelphia phillies', 111: 'boston red sox', 114: 'cleveland guardians', 113: 'cincinnati reds', 142: 'minnesota twins', 139: 'tampa bay rays', 137: 'san francisco giants', 118: 'kansas city royals', 135: 'san diego padres', 138: 'st. louis cardinals', 147: 'new york yankees', 121: 'new york mets', 119: 'los angeles dodgers', 108: 'los angeles angels', 112: 'chicago cubs', 145: 'chicago white sox'}
 
 
 
@@ -125,6 +127,7 @@ class callbackwrapper:
         self.test = None
         self.replies = {}
         self.extracmds = {}
+        self.client = discord.Client()
         self.client = discord.Client()
         self.points = defaultdict(int)
     def start(self):
@@ -145,13 +148,14 @@ class callbackwrapper:
         self.update_replies()
         self.load_points()
         self.on_start_test()
+        announce_scheduled.start()
 
     def on_start_test(self):
         print("Bot started")
     def load_points(self):
         with open("points.txt", "r") as pf:
             for line in pf:
-                u,p = line.strip().split("\t")
+                u,p = line.strip().rsplit("\t", 1)
                 p = int(p)
                 self.points[u] = p
         print(self.points)
@@ -175,7 +179,7 @@ class callbackwrapper:
                     self.replies[i] = o
 
 
-    async def cmd_tf(self, user, channel, msg, *args):
+    async def cmd_tf(self, user, channel, msg, ogcmd, *args):
         await self.send(channel, ":monkas:")
         
     def to_bilas(self, away, home):
@@ -193,7 +197,82 @@ class callbackwrapper:
     def getlogo(self, teamname):
         return teams[teamname.lower()]
 
-    async def cmd_games(self, user, channel, msg, *args):
+    async def cmd_fees(self, user, channel, msg, ogcmd, *args):
+        if len(args) != 2:
+            print(msg, args)
+            await self.send(channel, f"@{user}, usage is !fees <$initial investment> <ROI%>")
+            return
+        await self.cmd_profit(user, channel, msg, ogcmd, *args)
+    async def cmd_profit(self, user, channel, msg, ogcmd, *args):
+        if len(args) != 2:
+            print(msg, args)
+            await self.send(channel, f"@{user}, usage is !profit <$initial investment> <ROI%>")
+            return
+
+        ROI = None
+        try:
+            a = args[1]
+            if a[-1] == '%':
+                a = a[:-1]
+            ROI = float(a)
+        except ValueError:
+            await self.send(channel, f"@{user}, ROI has to be a percentage")
+            return
+        inv = None
+        try:
+            a = args[0]
+            if a[0] == "$":
+                a = a[1:]
+            elif a[-1] == "$":
+                a = a[:-1]
+            inv = float(a)
+            if inv <= 0:
+                raise ValueError
+        except ValueError:
+            await self.send(channel, f"@{user}, your initial investment has to be positive")
+            return
+
+        ROI /= 100
+        tiers = [0, 0.25, 1.00, float("inf")]
+        fees = [0.15, 0.30, 0.45]
+        feepercent = 0
+        if ROI < 0:
+            feepercent = 0
+        else:
+            for i in range(len(tiers)-1):
+                if ROI > tiers[i+1]:
+                    feepercent += fees[i] * (tiers[i+1] - tiers[i])
+                if tiers[i+1] >= ROI:
+                    feepercent += fees[i] * (ROI - tiers[i])
+                    break
+
+
+        profitpercent = ROI - feepercent
+        dp = abs(profitpercent)
+        pl = lambda x: x[0] if profitpercent >= 0 else x[1]
+
+        #msg = f"For an ROI of {ROI*100:.2f}%, you would pay {feepercent*100:.2f}% of the initial investment in fees. "
+        #msg += f"You would {pl(['profit', 'lose'])} {dp*100:.2f}% of the initial investment.\n"
+        msg = f"For an initial investment of ${inv:.2f} and {ROI*100:.2f}% ROI:```"
+        msg += f"Portfolio value:            ${inv*(ROI+1):.2f}\n"
+        msg += f"Return:                    {pl([' ','-'])}${abs(ROI*inv):.2f}\n"
+        msg += f"Fees:                       ${inv*feepercent:.2f}\n"
+        msg += f"Portfolio value after fees: ${inv*(profitpercent+1):.2f}\n"
+        msg += f"Profit:                    {pl([' ','-'])}${inv*(dp):.2f}\n"
+        msg += f"Percent profit:             {profitpercent*100:.2f}%```"
+        if round(inv*(profitpercent),2) >= inv:
+            msg += f"RHF to the moon! :peeporocket: :moon:"
+        elif profitpercent <= 0:
+            msg += f"RHF pls :ohno: :prayge:"
+
+        await self.send(channel, msg)
+
+
+
+
+
+
+    async def cmd_games(self, user, channel, msg, ogcmd, *args):
         resp = requests.get("https://www.espn.com/mlb/schedule").text
         i = resp.index("sched-container")
         i = resp.index("<tbody>",i) + 8
@@ -247,7 +326,8 @@ class callbackwrapper:
         await self.send(channel, msg1)
         await self.send(channel, msg2)
 
-    async def cmd_om(self, user, channel, msg, *args):
+
+    async def cmd_om(self, user, channel, msg, ogcmd, *args):
         i = 3
         while msg.content[i] != ' ':
             i += 1
@@ -258,16 +338,15 @@ class callbackwrapper:
         for s in ol:
             ou.extend(s.split("O"))
         await self.send(channel, ":omegalul:".join(ou))
-    async def cmd_game(self, user, channel, msg, *args):
+    async def cmd_game(self, user, channel, msg, ogcmd, *args):
         if args[0].lower() == "info":
-            await self.cmd_gameinfo(user, channel, msg, *args[1:])
-    async def cmd_tilas(self, user, channel, msg, *args):
-        if len(args) == 0:
-            await self.send(channel, f"@{user}, usage is !tilas [team name]")
-            return
-        await self.cmd_bilas(user, channel, msg, *args)
+            await self.cmd_gameinfo(user, channel, msg, ogcmd, *args[1:])
+    async def cmd_tilas(self, user, channel, msg, ogcmd, *args):
+        await self.cmd_bilas(user, channel, msg, ogcmd, *args)
     def getgame(self, team):
-        resp = requests.get("http://tilasports.com/mlb.html").text
+        resp = requests.get("https://bilasport.com/mlb.html").text
+        print(resp)
+        
         idxs = [m.start() for m in re.finditer("scoreboard scoreboard", resp)]
         
         cur = None
@@ -284,9 +363,9 @@ class callbackwrapper:
         
         return home, away
 
-    async def cmd_bilas(self, user, channel, msg, *args):
+    async def cmd_bilas(self, user, channel, msg, ogcmd, *args):
         if len(args) == 0:
-            await self.send(channel, f"@{user}, usage is !bilas [team name]")
+            await self.send(channel, f"@{user}, usage is !{ogcmd} <team name>")
             return
         team = " ".join(args)
         home, away = self.getgame(team)
@@ -352,7 +431,7 @@ class callbackwrapper:
                     state = f"Delayed"
         return (away, home, state)
 
-    async def cmd_gameinfo(self, user, channel, msg, *args):
+    async def cmd_gameinfo(self, user, channel, msg, ogcmd, *args):
         if len(args) == 0:
             await self.send(channel, f"@{user}, usage is !gameinfo [team name]")
             return
@@ -403,7 +482,7 @@ class callbackwrapper:
         await self.send(channel, st)
 
 
-    async def cmd_41(self, user, channel, msg, *args):
+    async def cmd_41(self, user, channel, msg, ogcmd, *args):
         await channel.send("https://open.spotify.com/artist/5CKuMRGq5IzrLCa9m6ukj8")
         return
         if len(args) == 0:
@@ -412,19 +491,19 @@ class callbackwrapper:
             query = "%20".join(args)
             url = f'https://open.spotify.com/search/artist%3a%22fortyone%20savage%22%20track%3a%22{query}%22'
             await channel.send(url)
-    async def cmd_ohgod(self, user, channel, msg, *args):
-        await self.cmd_ohman(user, channel, msg, *args)
-    async def cmd_ohman(self, user, channel, msg, *args):
+    async def cmd_ohgod(self, user, channel, msg, ogcmd, *args):
+        await self.cmd_ohman(user, channel, msg, ogcmd, *args)
+    async def cmd_ohman(self, user, channel, msg, ogcmd, *args):
         await channel.send("https://www.youtube.com/watch?v=8qloG5KG9oE")
-    async def cmd_wes(self, user, channel, msg, *args):
+    async def cmd_wes(self, user, channel, msg, ogcmd, *args):
         require(user, "manager")
         await channel.send(f"{emote('wes0')}")
-    async def cmd_updatereplies(self, user, channel, msg, *args):
+    async def cmd_updatereplies(self, user, channel, msg, ogcmd, *args):
         require(user, "picture adder")
         self.update_replies()
         await channel.send(f"{emote('ezball')} replies updated")
 
-    async def cmd_playerinfo(self, user, channel, msg, *args):
+    async def cmd_playerinfo(self, user, channel, msg, ogcmd, *args):
         if len(args) == 0:
             await self.send(channel, f"@{user}, usage is !playerinfo [player name]")
             return
@@ -434,12 +513,12 @@ class callbackwrapper:
         jso = json.loads(pid.text)
         print(jso["search_player_all"]["queryResults"]["row"]["player_id"])
 
-    async def cmd_benspecial(self, user, channel, msg, *args):
+    async def cmd_benspecial(self, user, channel, msg, ogcmd, *args):
         msg  = "Ingredients: grilled chicken, hamburger, rice, sriracha, tapatio,\n"
         msg += "                       soy sauce, bbq sauce, garlic powder, black pepper\n"
         msg += "Literally chop up meats and mix everything"
         await channel.send(msg)
-    async def cmd_8ball(self, user, channel, msg, *args):
+    async def cmd_8ball(self, user, channel, msg, ogcmd, *args):
         c = ["It is Certain.", "It is decidedly so.", "Without a doubt.", "Yes definitely.",
                 "You may rely on it.", "As I see it, yes.", "Most likely.", "Outlook good.",
                 "Yes.", "Signs point to yes.", "Reply hazy, try again.", "Ask again later.",
@@ -449,7 +528,7 @@ class callbackwrapper:
         msg = random.choice(c)
         await self.send(channel, msg)
 
-    async def cmd_points(self, user, channel, msg, *args):
+    async def cmd_points(self, user, channel, msg, ogcmd, *args):
         await self.send(channel, f"@{user}, you have {self.points[user.name]} points.\nYou can get more by sending messages.")
 
     def updatepoints(self):
@@ -457,7 +536,7 @@ class callbackwrapper:
             for u,p in self.points.items():
                 pf.write(f"{u}\t{p}\n")
         print(self.points)
-    async def cmd_odds(self, user, channel, msg, *args):
+    async def cmd_odds(self, user, channel, msg, ogcmd, *args):
         msg = f"@{user}, odds for !gamble are\n"
         msg += "     0.5% - 100x\n"
         msg += "     4.5% - 10x\n"
@@ -467,7 +546,7 @@ class callbackwrapper:
         await self.send(channel, msg)
         
         
-    async def cmd_gamble(self, user, channel, msg, *args):
+    async def cmd_gamble(self, user, channel, msg, ogcmd, *args):
         if len(args) != 1:
             await self.send(channel, f"@{user}, usage is !gamble [amount]")
             return
@@ -557,7 +636,7 @@ class callbackwrapper:
 
             found = False
             try:
-                await getattr(self, "cmd_" + cmd)(user, message.channel, message, *args)
+                await getattr(self, "cmd_" + cmd)(user, message.channel, message, cmd, *args)
                 found = True
             except AttributeError:
                 pass
@@ -636,5 +715,24 @@ async def on_ready():
 async def on_message(message):
     await bot.on_message(message)
     
+
+@tasks.loop(days=1)
+async def announce_scheduled():
+    await bot.announce("@everyone TEST this better be sent at 8AM")
+
+
+@announce_scheduled.before_loop
+async def announcement_scheduler():
+    now = datetime.datetime.utcnow()  # or `utcnow`
+    future = datetime.datetime(now.year, now.month, now.day, now.hour + 1, 0)
+    WHEN = datetime.time(16, 0, 0)
+    future = datetime.datetime.combine(now.date(), WHEN)
+    delta = (future - now).total_seconds()
+
+    await asyncio.sleep(delta)
+
+
+
+
 
 bot.start()

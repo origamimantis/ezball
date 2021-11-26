@@ -1,0 +1,6 @@
+discord
+requests
+python-dateutil
+requests_html
+mlb-statsapi
+asyncio
