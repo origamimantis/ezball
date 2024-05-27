@@ -732,7 +732,4 @@ async def announcement_scheduler():
     await asyncio.sleep(delta)
 
 
-
-
-
 bot.start()
